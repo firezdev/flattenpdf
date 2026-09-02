@@ -15,6 +15,7 @@ from flet import (
     ProgressBar,
     SnackBar,
     Text,
+    TextAlign,
     run
 )
 
@@ -23,6 +24,8 @@ from lib import flatten
 
 def main(page: Page):
     selected_file = None
+    selected_text = Text(visible=False, text_align=TextAlign.CENTER)
+    saved_text = Text(visible=False, text_align=TextAlign.CENTER)
 
     async def handle_save(e: Event[Button]):
         file = await FilePicker().save_file(
@@ -30,6 +33,9 @@ def main(page: Page):
         )
         if file:
             move("temp.pdf", file)
+            saved_text.value = f"Сохранено: {file.rsplit('/', maxsplit=1)[-1]}"
+            saved_text.visible = True
+            page.update()
             page.show_dialog(
                 SnackBar(Text("Файл сохранен", color=Colors.GREEN), bgcolor="#111111")
             )
@@ -44,19 +50,27 @@ def main(page: Page):
     save_control = Column(
         [
             Text("Выберите путь для сохранения PDF"),
+            saved_text,
             Button("Сохранить", on_click=handle_save)
         ],
         visible=False,
         alignment=MainAxisAlignment.CENTER,
         horizontal_alignment=CrossAxisAlignment.CENTER
     )
-    bar = ProgressBar(width=350, value=0, visible=False)
+    bar = ProgressBar(width=350, value=0)
 
     async def handle_pick(e: Event[Button]):
         nonlocal save_control, selected_file
 
         file = await FilePicker().pick_files(allowed_extensions=["pdf"])
         if file and file[0].path:
+            selected_file = file[0].name
+            bar.value = 0
+            selected_text.visible = True
+            selected_text.value = f"Выбрано: {selected_file}"
+            saved_text.visible = False
+            page.update()
+
             page.show_dialog(
                 SnackBar(
                     Text("Конвертация..", color=Colors.PRIMARY),
@@ -64,12 +78,24 @@ def main(page: Page):
                 )
             )
 
-            def on_progress(value: float):
+            async def _on_progress(value: float):
                 bar.value = value
                 page.update()
 
-            bar.visible = True
-            await to_thread(flatten, file[0].path, "temp.pdf", on_progress)
+            def on_progress(value: float):
+                page.run_task(_on_progress, value)
+
+            res = await to_thread(flatten, file[0].path, "temp.pdf", on_progress)
+            await _on_progress(1)
+            if res:
+                bar.visible = False
+                page.update()
+                page.show_dialog(
+                    SnackBar(
+                        Text(res, color=Colors.ERROR), bgcolor=Colors.SURFACE_CONTAINER
+                    )
+                )
+                return
 
             page.show_dialog(
                 SnackBar(
@@ -78,7 +104,6 @@ def main(page: Page):
                 )
             )
             save_control.visible = True
-            bar.visible = False
             page.update()
         else:
             page.show_dialog(
@@ -100,6 +125,7 @@ def main(page: Page):
             Column(
                 [
                     Text("Выберите PDF для конвертации"),
+                    selected_text,
                     Button("Выбрать", on_click=handle_pick),
                     bar,
                     save_control
