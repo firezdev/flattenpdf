@@ -2,6 +2,7 @@ from flet import Alignment, Column, Container, Page, Tab, TabBar, TabBarView, Ta
 
 from convert import ConvertPage
 from crop import CropPage
+from print import PrintPage
 
 
 def main(page: Page):
@@ -20,8 +21,10 @@ def main(page: Page):
                 expand=True,
                 content=Column(
                     [
-                        TabBar([Tab("Конвертация"), Tab("Обрезка")]),
-                        TabBarView([ConvertPage(), CropPage()], expand=True)
+                        TabBar([Tab("Конвертация"), Tab("Обрезка"), Tab("Печать")]),
+                        TabBarView(
+                            [ConvertPage(), CropPage(), PrintPage()], expand=True
+                        )
                     ],
                     expand=True
                 )
