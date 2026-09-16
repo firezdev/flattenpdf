@@ -15,7 +15,7 @@ from pymupdf import Matrix, Rect, open
 
 
 def flatten(
-    src_path: str, dst_path: str, on_progress: Callable[[float], None] | None = None
+    src_path: str, on_progress: Callable[[float], None] | None = None
 ) -> str | None:
     try:
         src = open(src_path)
@@ -49,7 +49,7 @@ def flatten(
                 print("progress", i / len(order))
                 on_progress(i / len(order))
 
-        dst.save(dst_path)
+        dst.save(SETTINGS / "flatten.pdf")
         dst.close()
         src.close()
 
@@ -64,9 +64,7 @@ def get_page(path: str) -> tuple[str, float, float]:
     return b64encode(pix.tobytes("png")).decode(), float(pix.width), float(pix.height)
 
 
-def crop_pdf(
-    src_path: str, dst_path: str, rel: tuple[float, float, float, float]
-) -> str | None:
+def crop_pdf(src_path: str, rel: tuple[float, float, float, float]) -> str | None:
     x0, y0, x1, y1 = rel
     try:
         src = open(src_path)
@@ -81,7 +79,7 @@ def crop_pdf(
             )
             page.set_cropbox(box)
 
-        src.save(dst_path)
+        src.save(SETTINGS / "crop.pdf")
     except Exception as e:
         return str(e)
 

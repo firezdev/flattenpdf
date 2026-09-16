@@ -1,5 +1,5 @@
 from asyncio import to_thread
-from shutil import move
+from shutil import copy
 
 from flet import (
     Button,
@@ -15,7 +15,7 @@ from flet import (
     TextAlign
 )
 
-from lib import flatten
+from lib import SETTINGS, flatten
 
 
 class ConvertPage(Column):
@@ -52,7 +52,7 @@ class ConvertPage(Column):
             file_name=self.selected_file, allowed_extensions=["pdf"]
         )
         if file:
-            move("temp.pdf", file)
+            copy(SETTINGS / "flatten.pdf", file)
             self.saved_text.value = f"Сохранено: {file.rsplit('/', maxsplit=1)[-1]}"
             self.saved_text.visible = True
             self.update()
@@ -91,7 +91,7 @@ class ConvertPage(Column):
             def on_progress(value: float):
                 self.page.run_task(self._on_progress, value)
 
-            res = await to_thread(flatten, file[0].path, "temp.pdf", on_progress)
+            res = await to_thread(flatten, file[0].path, on_progress)
             await self._on_progress(1)
             if res:
                 self.bar.visible = False

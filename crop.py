@@ -1,6 +1,6 @@
 from asyncio import to_thread
 from functools import partial
-from shutil import move
+from shutil import copy
 
 from flet import (
     Border,
@@ -12,7 +12,6 @@ from flet import (
     CrossAxisAlignment,
     DragUpdateEvent,
     Dropdown,
-    DropdownOption,
     Event,
     FilePicker,
     GestureDetector,
@@ -20,18 +19,18 @@ from flet import (
     Icons,
     Image,
     MainAxisAlignment,
-    Row,
+    ScrollMode,
     SnackBar,
     Stack,
     Text,
     TextAlign
 )
 
-from lib import crop_pdf, get_page
+from lib import SETTINGS, crop_pdf, get_page
 
 LEFT = ("tl", "bl")
 TOP = ("tl", "tr")
-FORMATS = {"A4": 297 / 210, "A5": 210 / 148, "B5": 250 / 176}
+# FORMATS = {"A4": 297 / 210, "A5": 210 / 148, "B5": 250 / 176}
 
 
 class CropPage(Column):
@@ -61,27 +60,20 @@ class CropPage(Column):
             for name in ("tl", "tr", "bl", "br")
         }
         self.stack = Stack([self.preview, self.frame, *self.handles.values()])
-        self.format_dd = Dropdown(
-            options=[DropdownOption(key=name) for name in FORMATS],
-            value=self.format,
-            width=100,
-            on_select=self.set_format
-        )
+        # self.format_dd = Dropdown(
+        #     options=[DropdownOption(key=name) for name in FORMATS],
+        #     value=self.format,
+        #     width=100,
+        #     on_select=self.set_format
+        # )
         self.rotate_btn = IconButton(
-            icon=Icons.CROP_PORTRAIT,
+            icon=Icons.ROTATE_RIGHT,
             tooltip="Ориентация рамки",
             style=ButtonStyle(padding=4),
             on_click=self.flip_orientation
         )
         self.crop_control = Column(
-            [
-                Row(
-                    [Text("Формат:"), self.format_dd, self.rotate_btn],
-                    alignment=MainAxisAlignment.CENTER
-                ),
-                self.stack,
-                Button("Обрезать", on_click=self.crop)
-            ],
+            [self.rotate_btn, self.stack, Button("Обрезать", on_click=self.crop)],
             visible=False,
             alignment=MainAxisAlignment.CENTER,
             horizontal_alignment=CrossAxisAlignment.CENTER
@@ -106,10 +98,11 @@ class CropPage(Column):
         ]
         self.alignment = MainAxisAlignment.CENTER
         self.horizontal_alignment = CrossAxisAlignment.CENTER
+        self.scroll = ScrollMode.AUTO
 
     @property
     def ratio(self) -> float:
-        base = FORMATS[self.format]
+        base = 297 / 210  # FORMATS[self.format]
         return 1 / base if self.landscape else base
 
     def apply_frame(self):
@@ -164,14 +157,11 @@ class CropPage(Column):
         self.update()
 
     def set_format(self, e: Event[Dropdown]):
-        self.format = self.format_dd.value or "A4"
+        self.format = "A4"  # self.format_dd.value or "A4"
         self.refit_frame()
 
     def flip_orientation(self, e: Event[IconButton]):
         self.landscape = not self.landscape
-        self.rotate_btn.icon = (
-            Icons.CROP_LANDSCAPE if self.landscape else Icons.CROP_PORTRAIT
-        )
         self.refit_frame()
 
     async def pick(self, e: Event[Button]):
@@ -187,7 +177,7 @@ class CropPage(Column):
 
             b64, raw_w, raw_h = await to_thread(get_page, self.selected_file.path)
             aspect = raw_h / raw_w
-            self.img_w = 500 / aspect
+            self.img_w = 600 / aspect
             self.img_h = self.img_w * aspect
             self.preview.src = b64
             self.preview.width = self.img_w
@@ -195,9 +185,6 @@ class CropPage(Column):
             self.stack.width = self.img_w
             self.stack.height = self.img_h
             self.landscape = aspect < 1  # match the page orientation by default
-            self.rotate_btn.icon = (
-                Icons.CROP_LANDSCAPE if self.landscape else Icons.CROP_PORTRAIT
-            )
             self.reset_frame()
             self.crop_control.visible = True
             self.page.update()
@@ -218,7 +205,7 @@ class CropPage(Column):
             (self.x + self.w) / self.img_w,
             (self.y + self.h) / self.img_h
         )
-        res = await to_thread(crop_pdf, self.selected_file.path, "temp.pdf", rel)
+        res = await to_thread(crop_pdf, self.selected_file.path, rel)
         if res:
             self.page.show_dialog(
                 SnackBar(
@@ -243,7 +230,7 @@ class CropPage(Column):
             file_name=self.selected_file.name, allowed_extensions=["pdf"]
         )
         if file:
-            move("temp.pdf", file)
+            copy(SETTINGS / "crop.pdf", file)
             self.saved_text.value = f"Сохранено: {file.rsplit('/', maxsplit=1)[-1]}"
             self.saved_text.visible = True
             self.update()
