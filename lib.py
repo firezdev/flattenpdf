@@ -1,6 +1,10 @@
 from base64 import b64encode
+from json import dumps, loads
+from pathlib import Path
 from random import randint
-from time import sleep
+from re import compile
+from socket import create_connection
+from time import monotonic, sleep
 from typing import Callable
 
 import win32con
@@ -83,49 +87,117 @@ def crop_pdf(
 
 
 DPI = 200
-EVEN_REVERSED = True  # flip order for face-up output trays
+SETTINGS = Path.home() / ".flattenpdf"
+PROBE_PORTS = (9100, 631, 515)
+PROBE_TTL = 15
+IPV4 = compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 
-STATUS_FLAGS = (
+_reachable: dict[str, tuple[float, bool]] = {}
+
+ERROR_FLAGS = (
     (win32print.PRINTER_STATUS_PAPER_JAM, "Замятие"),
     (win32print.PRINTER_STATUS_PAPER_OUT, "Нет бумаги"),
+    (win32print.PRINTER_STATUS_OUT_OF_MEMORY, "Нет памяти"),
     (win32print.PRINTER_STATUS_DOOR_OPEN, "Крышка открыта"),
-    (win32print.PRINTER_STATUS_OFFLINE, "Отключен"),
-    (win32print.PRINTER_STATUS_NOT_AVAILABLE, "Недоступен"),
+    (win32print.PRINTER_STATUS_USER_INTERVENTION, "Нужно вмешательство"),
     (win32print.PRINTER_STATUS_ERROR, "Ошибка"),
-    (win32print.PRINTER_STATUS_PAUSED, "Пауза"),
-    (win32print.PRINTER_STATUS_PRINTING, "Печатает"),
-    (win32print.PRINTER_STATUS_BUSY, "Занят")
+    (win32print.PRINTER_STATUS_NOT_AVAILABLE, "Недоступен")
 )
-ERROR_MASK = (
-    win32print.PRINTER_STATUS_PAPER_JAM
-    | win32print.PRINTER_STATUS_PAPER_OUT
-    | win32print.PRINTER_STATUS_DOOR_OPEN
-    | win32print.PRINTER_STATUS_OFFLINE
-    | win32print.PRINTER_STATUS_NOT_AVAILABLE
-    | win32print.PRINTER_STATUS_ERROR
-)
+
+
+def load_settings() -> dict:
+    try:
+        return loads((SETTINGS / "printers.json").read_text("utf-8"))
+    except Exception:
+        return {}
+
+
+def save_settings(data: dict):
+    SETTINGS.mkdir(parents=True, exist_ok=True)
+    (SETTINGS / "printers.json").write_text(
+        dumps(data, ensure_ascii=False, indent=2), "utf-8"
+    )
+
+
+def get_reversed(name: str) -> bool:
+    return bool(load_settings().get(name, {}).get("reversed", False))
+
+
+def set_reversed(name: str, value: bool):
+    data = load_settings()
+    data.setdefault(name, {})["reversed"] = value
+    save_settings(data)
+
+
+def _reach(port_name: str) -> bool | None:
+    """TCP probe for network printers; None when the port is not an IP one."""
+    match = IPV4.search(port_name or "")
+    if not match:
+        return None
+    host = match.group(0)
+    cached = _reachable.get(host)
+    now = monotonic()
+    if cached and now - cached[0] < PROBE_TTL:
+        return cached[1]
+    alive = False
+    for port in PROBE_PORTS:
+        try:
+            with create_connection((host, port), timeout=0.4):
+                alive = True
+                break
+        except OSError:
+            continue
+    _reachable[host] = (now, alive)
+    return alive
 
 
 def probe(name: str) -> dict:
     handle = win32print.OpenPrinter(name)
     try:
         info = win32print.GetPrinter(handle, 2)
+        # level 6 is refreshed on each call, level 2 Status is cached by the spooler
+        status = win32print.GetPrinter(handle, 6)["Status"]
         jobs = win32print.EnumJobs(handle, 0, -1, 1)
     finally:
         win32print.ClosePrinter(handle)
-    status = info["Status"]
-    label = next((text for flag, text in STATUS_FLAGS if status & flag), None)
+
+    offline = bool(
+        status & win32print.PRINTER_STATUS_OFFLINE
+        or info["Attributes"] & win32print.PRINTER_ATTRIBUTE_WORK_OFFLINE
+    )
+    if _reach(info.get("pPortName", "")) is False:
+        offline = True
+
+    error = next((text for flag, text in ERROR_FLAGS if status & flag), None)
+    paused = bool(status & win32print.PRINTER_STATUS_PAUSED)
+    busy = bool(jobs) or bool(
+        status & (win32print.PRINTER_STATUS_PRINTING | win32print.PRINTER_STATUS_BUSY)
+    )
     job = ""
     if jobs:
         first = jobs[0]
         job = f"{first['pDocument']} {first['PagesPrinted']}/{first['TotalPages']}"
+
+    if offline:
+        label = "Отключен"
+    elif error:
+        label = error
+    elif paused:
+        label = "Пауза"
+    elif busy:
+        label = "Печатает"
+    else:
+        label = "Готов"
+
     return {
         "name": name,
-        "status": label or ("Печатает" if jobs else "Готов"),
+        "status": label,
         "job": job,
-        "busy": bool(jobs),
-        "paused": bool(status & win32print.PRINTER_STATUS_PAUSED),
-        "error": bool(status & ERROR_MASK)
+        "busy": busy,
+        "paused": paused,
+        "offline": offline,
+        "error": bool(error) or offline,
+        "reversed": get_reversed(name)
     }
 
 
@@ -133,6 +205,12 @@ def list_printers() -> list[dict]:
     flags = win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
     result = []
     for entry in win32print.EnumPrinters(flags, None, 1):
+        if (
+            entry[2] in ("Экспорт в WPS PDF", "Fax", "OneNote for Windows 10")
+            or "Adobe" in entry[2]
+            or "Microsoft" in entry[2]
+        ):
+            continue
         try:
             result.append(probe(entry[2]))
         except Exception:
@@ -159,11 +237,11 @@ def toggle_printer(name: str, pause: bool) -> str | None:
     return None
 
 
-def page_indexes(path: str, even: bool) -> list[int]:
+def page_indexes(path: str, even: bool, printer: str) -> list[int]:
     with open(path) as doc:
         count = doc.page_count
     indexes = [i for i in range(count) if (i % 2 == 1) == even]
-    if even and EVEN_REVERSED:
+    if even and get_reversed(printer):
         indexes.reverse()
     return indexes
 

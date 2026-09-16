@@ -17,7 +17,7 @@ def main(page: Page):
     page.add(
         Container(
             Tabs(
-                length=2,
+                length=3,
                 expand=True,
                 content=Column(
                     [
